@@ -1,5 +1,7 @@
 #include <iostream>
+#include <cstring>
 #include <functional>
+#include <thread>
 #include "colite.h"
 #include "TestAllocator.h"
 
