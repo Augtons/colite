@@ -7,7 +7,7 @@ namespace colite {
     template<typename Fn, typename Alloc>
     class callable;
 
-    template<typename T, typename Alloc>
+    template<typename T>
     class suspend;
 
     namespace detail {
@@ -57,19 +57,8 @@ namespace colite {
         template<typename T>
         constexpr bool is_suspend = false;
 
-        template<typename T, typename Alloc>
-        constexpr bool is_suspend<colite::suspend<T, Alloc>> = true;
-
-        /**
-         * @brief 满足分配器是否为 Alloc 的 rebind_alloc 的 suspend 类
-         * @tparam S 待判断的 suspend 对象
-         * @tparam Alloc 待判断的分配器
-         */
-        template<typename S, typename Alloc>
-        concept is_allocator_like_suspend = is_suspend<S> && std::same_as<
-            typename S::byte_allocator,
-            typename std::allocator_traits<Alloc>::template rebind_alloc<std::byte>
-        >;
+        template<typename T>
+        constexpr bool is_suspend<colite::suspend<T>> = true;
 
         template<typename C>
         constexpr bool is_std_chrono_duration = false;

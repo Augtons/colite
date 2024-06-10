@@ -6,16 +6,15 @@
 #include "colite/dispatchers.h"
 
 namespace colite {
-    template<typename Alloc = std::allocator<std::byte>>
-    class eventloop_dispatcher: public colite::dispatcher<Alloc> {
-        using byte_allocator = typename std::allocator_traits<Alloc>::template rebind_alloc<std::byte>;
+    class eventloop_dispatcher: public colite::dispatcher {
+        using byte_allocator = colite::allocator::allocator<std::byte>;
     public:
         class job {
         public:
             job(
                 void *id,
                 colite::port::time_duration time,
-                colite::callable<void(), byte_allocator> callable
+                colite::callable<void()> callable
             ): id(id),
                ready_time(colite::port::current_time() + time),
                callable(std::move(callable))
@@ -25,8 +24,8 @@ namespace colite {
             job(
                 void *id,
                 colite::port::time_duration time,
-                colite::callable<void(), byte_allocator> callable,
-                colite::callable<bool(), byte_allocator> predicate
+                colite::callable<void()> callable,
+                colite::callable<bool()> predicate
             ): id(id),
                ready_time(colite::port::current_time() + time),
                callable(std::move(callable)),
@@ -34,6 +33,7 @@ namespace colite {
             {
             }
 
+            [[nodiscard]]
             auto ready() const -> bool {
                 if (predicate) {
                     return ready_time <= colite::port::current_time() && predicate.value()();
@@ -52,18 +52,15 @@ namespace colite {
         private:
             void *id;
             colite::port::time_point ready_time;
-            colite::callable<void(), byte_allocator> callable;
-            std::optional<colite::callable<bool(), byte_allocator>> predicate = std::nullopt;
+            colite::callable<void()> callable;
+            std::optional<colite::callable<bool()>> predicate = std::nullopt;
         };
 
-        explicit eventloop_dispatcher(const Alloc& alloc = {}): allocator_(alloc) {
-
-        }
-
+        eventloop_dispatcher() = default;
         ~eventloop_dispatcher() override = default;
 
         template<typename Coro>
-            requires colite::traits::is_allocator_like_suspend<std::remove_cvref_t<Coro>, byte_allocator>
+            requires colite::traits::is_suspend<std::remove_cvref_t<Coro>>
         auto run(Coro&& coroutine) {
             bool finished;
             auto&& coro = this->launch(std::forward<Coro>(coroutine));
@@ -86,13 +83,13 @@ namespace colite {
     private:
         byte_allocator allocator_;
         std::recursive_mutex lock_ {};
-        std::list<job, typename std::allocator_traits<byte_allocator>::template rebind_alloc<job>>
+        std::list<job, std::allocator_traits<byte_allocator>::rebind_alloc<job>>
             jobs_ { allocator_ };
 
         void dispatch(
             void *id,
             colite::port::time_duration time,
-            colite::callable<void(), byte_allocator> callable
+            colite::callable<void()> callable
         ) override {
             std::lock_guard locker { lock_ };
             jobs_.emplace_back(id, time, std::move(callable));
@@ -101,8 +98,8 @@ namespace colite {
         void dispatch(
             void *id,
             colite::port::time_duration time,
-            colite::callable<void(), byte_allocator> callable,
-            colite::callable<bool(), byte_allocator> predicate
+            colite::callable<void()> callable,
+            colite::callable<bool()> predicate
         ) override {
             std::lock_guard locker { lock_ };
             jobs_.emplace_back(id, time, std::move(callable), std::move(predicate));

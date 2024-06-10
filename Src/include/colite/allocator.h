@@ -1,15 +1,36 @@
 #pragma once
 
 #include <unordered_map>
+#include "colite/port.h"
 
 namespace colite::allocator {
+    template<typename T>
+    class allocator {
+    public:
+        using value_type = T;
 
-    template<typename Key, typename Value, typename Alloc>
-    using unordered_map = std::unordered_map<
-                              Key,
-                              Value,
-                              std::hash<Key>,
-                              std::equal_to<Key>,
-                              typename std::allocator_traits<Alloc>::template rebind_alloc<std::pair<const Key, Value>>
-                          >;
+        constexpr allocator() = default;
+
+        template<typename U>
+        constexpr allocator(const allocator<U>&) noexcept {  }
+
+        [[nodiscard]]
+        auto allocate(size_t n) -> value_type* {
+            return (value_type*)colite::port::calloc(n, sizeof(value_type));
+        }
+
+        void deallocate(value_type* pointer, size_t n) {
+            colite::port::free(pointer);
+        }
+    };
+
+    template<typename T, typename U>
+    auto operator == (const allocator<T>&, const allocator<U>&) {
+        return true;
+    }
+
+    template<typename T, typename U>
+    auto operator != (const allocator<T>&, const allocator<U>&) {
+        return false;
+    }
 }

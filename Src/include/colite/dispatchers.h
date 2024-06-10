@@ -9,8 +9,10 @@
 #include "colite/traits.h"
 
 namespace colite {
-    template<typename Alloc>
     class dispatcher;
+
+    template<typename T = void>
+    class suspend;
 
     // 协程状态
     enum class coroutine_status {
@@ -20,10 +22,9 @@ namespace colite {
         CANCELED,
     };
 
-    template<typename Alloc>
     struct coroutine_state {
         // 调度器
-        dispatcher<Alloc>* dispatcher_ = nullptr;
+        dispatcher* dispatcher_ = nullptr;
 
         // 当前协程的状态
         coroutine_status state_ = coroutine_status::CREATED;
@@ -33,26 +34,26 @@ namespace colite {
 
         // 等待这个协程的人
         std::coroutine_handle<> awaiter_handle_{};
-        dispatcher<Alloc> *awaiter_dispatcher_ = nullptr;
+        dispatcher *awaiter_dispatcher_ = nullptr;
     };
 }
 
 namespace colite {
     // 调度器基类
-    template<typename Alloc = std::allocator<std::byte>>
     class dispatcher {
-        using byte_allocator = typename std::allocator_traits<Alloc>::template rebind_alloc<std::byte>;
+        using byte_allocator = colite::allocator::allocator<std::byte>;
 
-        template<typename T, typename A>
+        template<typename T = void>
         friend class colite::suspend;
 
     public:
-        explicit dispatcher(const Alloc& alloc = {}): allocator_(alloc) {}
-
+        explicit dispatcher() = default;
         virtual ~dispatcher() = default;
 
+        auto sleep(colite::port::time_duration time) -> colite::suspend<>;
+
         template<typename Coro>
-            requires colite::traits::is_allocator_like_suspend<std::remove_cvref_t<Coro>, byte_allocator>
+            requires colite::traits::is_suspend<std::remove_cvref_t<Coro>>
         auto launch(
             Coro&& coroutine,
             colite::port::time_duration duration = colite::port::time_duration(0)
@@ -92,31 +93,23 @@ namespace colite {
             return std::forward<Coro>(coroutine);
         }
 
-        auto sleep(colite::port::time_duration time) {
-            return launch([]() -> colite::suspend<void, byte_allocator> {
-                co_return;
-            }(), time);
-        }
-
     protected:
-        byte_allocator allocator_;
-        colite::allocator::unordered_map<std::coroutine_handle<>, std::shared_ptr<colite::coroutine_state<byte_allocator>>, byte_allocator> coroutines_ { allocator_ };
+        std::unordered_map<
+            std::coroutine_handle<>,
+            std::shared_ptr<colite::coroutine_state>,
+            std::hash<std::coroutine_handle<>>,
+            std::equal_to<std::coroutine_handle<>>,
+            colite::allocator::allocator<std::pair<const std::coroutine_handle<>, std::shared_ptr<colite::coroutine_state>>>
+        > coroutines_ {};
 
         /**
          * @brief 取消所有与当前协程关联的任务，并从协程列表中删除该协程
          * @param handle 协程句柄
          */
-        void cancel(std::coroutine_handle<> handle) {
-            auto it = coroutines_.find(handle);
-            if (it != coroutines_.end()) {
-                it->second->state_ = coroutine_status::CANCELED;
-            }
-            coroutines_.erase(handle);
-            cancel_jobs(handle.address());
-        }
+        void cancel(std::coroutine_handle<> handle);
 
-        virtual void dispatch(void *id, colite::port::time_duration time, colite::callable<void(), byte_allocator> callable) = 0;
-        virtual void dispatch(void *id, colite::port::time_duration time, colite::callable<void(), byte_allocator> callable, colite::callable<bool(), byte_allocator> predicate) = 0;
+        virtual void dispatch(void *id, colite::port::time_duration time, colite::callable<void()> callable) = 0;
+        virtual void dispatch(void *id, colite::port::time_duration time, colite::callable<void()> callable, colite::callable<bool()> predicate) = 0;
         virtual void cancel_jobs(void *id) = 0;
     };
 }

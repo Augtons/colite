@@ -5,6 +5,9 @@
 #include <utility>
 #include <functional>
 #include <memory>
+
+#include "colite/allocator.h"
+#include "colite/port.h"
 #include "colite/traits.h"
 
 namespace colite::detail {
@@ -40,7 +43,7 @@ namespace colite::detail {
 }
 
 namespace colite {
-    template<typename Fn, typename Alloc = std::allocator<std::byte>>
+    template<typename Fn, typename Alloc = colite::allocator::allocator<std::byte>>
     class callable {
     public:
         using byte_allocator = typename std::allocator_traits<Alloc>::template rebind_alloc<std::byte>;

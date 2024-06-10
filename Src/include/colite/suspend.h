@@ -8,9 +8,9 @@
 
 namespace colite {
     namespace detail {
-        template<typename Coro, typename R, typename Alloc>
+        template<typename Coro, typename R>
         class promise_type {
-            template<typename T, typename A>
+            template<typename T>
             friend class colite::suspend;
 
             using return_value_type = std::conditional_t<
@@ -19,14 +19,10 @@ namespace colite {
                 std::optional<R>
             >;
 
-            using byte_allocator = typename std::allocator_traits<Alloc>::template rebind_alloc<std::byte>;
-            using byte_allocator_pointer = typename std::allocator_traits<byte_allocator>::pointer;
-
         public:
             auto get_return_object() -> Coro {
-                auto allocator = byte_allocator{};
                 this_handle_ = std::coroutine_handle<promise_type>::from_promise(*this);
-                state_ = std::allocate_shared<colite::coroutine_state<byte_allocator>, byte_allocator>(allocator);
+                state_ = std::allocate_shared<colite::coroutine_state, colite::allocator::allocator<std::byte>>({});
                 return Coro { this_handle_, state_ };
             }
 
@@ -63,35 +59,29 @@ namespace colite {
             }
 
             void* operator new(std::size_t n) {
-                auto allocator = byte_allocator{};
-                return (void*)std::allocator_traits<byte_allocator>::allocate(allocator, n);
+                return colite::port::calloc(n, sizeof(std::byte));
             }
 
             void operator delete(void* ptr, size_t n) noexcept {
-                auto allocator = byte_allocator{};
-                std::allocator_traits<byte_allocator>::deallocate(allocator, (byte_allocator_pointer)ptr, n);
+                colite::port::free(ptr);
             }
 
         private:
             std::coroutine_handle<promise_type> this_handle_;
             return_value_type ret_value_{};
             std::exception_ptr exception_ptr_;
-            std::shared_ptr<colite::coroutine_state<byte_allocator>> state_;
+            std::shared_ptr<colite::coroutine_state> state_;
         };
 
-        template<typename Coro, typename Alloc>
-        class promise_type<Coro, void, Alloc> {
-            template<typename T, typename A>
+        template<typename Coro>
+        class promise_type<Coro, void> {
+            template<typename T>
             friend class colite::suspend;
-
-            using byte_allocator = typename std::allocator_traits<Alloc>::template rebind_alloc<std::byte>;
-            using byte_allocator_pointer = typename std::allocator_traits<byte_allocator>::pointer;
 
         public:
             auto get_return_object() -> Coro {
-                auto allocator = byte_allocator{};
                 this_handle_ = std::coroutine_handle<promise_type>::from_promise(*this);
-                state_ = std::allocate_shared<colite::coroutine_state<byte_allocator>, byte_allocator>(allocator);
+                state_ = std::allocate_shared<colite::coroutine_state, colite::allocator::allocator<std::byte>>({});
                 return Coro { this_handle_, state_ };
             }
 
@@ -113,31 +103,27 @@ namespace colite {
             }
 
             void* operator new(std::size_t n) {
-                auto allocator = byte_allocator{};
-                return (void*)std::allocator_traits<byte_allocator>::allocate(allocator, n);
+                return colite::port::calloc(n, sizeof(std::byte));
             }
 
             void operator delete(void* ptr, size_t n) noexcept {
-                auto allocator = byte_allocator{};
-                std::allocator_traits<byte_allocator>::deallocate(allocator, (byte_allocator_pointer)ptr, n);
+                colite::port::free(ptr);
             }
 
         private:
             std::coroutine_handle<promise_type> this_handle_;
             std::exception_ptr exception_ptr_;
-            std::shared_ptr<colite::coroutine_state<byte_allocator>> state_;
+            std::shared_ptr<colite::coroutine_state> state_;
         };
     }
 }
 
 namespace colite {
-    template<typename T, typename Alloc = std::allocator<std::byte>>
+    template<typename T>
     class suspend {
     public:
-        using byte_allocator = typename std::allocator_traits<Alloc>::template rebind_alloc<std::byte>;
-        using promise_type = colite::detail::promise_type<suspend, T, Alloc>;
+        using promise_type = colite::detail::promise_type<suspend, T>;
 
-        template<typename A>
         friend class colite::dispatcher;
 
         suspend() = default;
@@ -148,7 +134,7 @@ namespace colite {
 
         explicit suspend(
             const std::coroutine_handle<promise_type>& handle,
-            std::shared_ptr<colite::coroutine_state<byte_allocator>> state
+            std::shared_ptr<colite::coroutine_state> state
         ): this_handle_(handle), state_(std::move(state)) {
 
         }
@@ -272,6 +258,10 @@ namespace colite {
         }
     private:
         std::coroutine_handle<promise_type> this_handle_ {};
-        std::optional<std::shared_ptr<colite::coroutine_state<byte_allocator>>> state_ = std::nullopt;
+        std::optional<std::shared_ptr<colite::coroutine_state>> state_ = std::nullopt;
     };
+
+    inline auto nop_coroutine() -> suspend<> {
+        co_return;
+    }
 }
