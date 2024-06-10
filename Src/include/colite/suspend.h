@@ -190,7 +190,6 @@ namespace colite {
                 throw std::runtime_error("suspend<T> is being `co_await` when it was cancelled.");
             }
             state_.value()->awaiter_handle_ = ext_handle;
-            state_.value()->awaiter_dispatcher_ = ext_handle.promise().state_->awaiter_dispatcher_;
             if (state_.value()->state_ == colite::coroutine_status::CREATED) {
                 state_.value()->dispatcher_->launch(*this);
             }

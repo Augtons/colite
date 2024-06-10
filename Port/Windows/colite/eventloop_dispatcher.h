@@ -65,7 +65,6 @@ namespace colite {
             bool finished;
             auto&& coro = this->launch(std::forward<Coro>(coroutine));
             auto it = this->coroutines_.find(coro.get_coroutine_handle());
-            it->second->awaiter_dispatcher_ = this;
             while (true) {
                 coro.check_and_throw_exception();
                 {

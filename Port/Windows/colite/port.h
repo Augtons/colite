@@ -29,11 +29,14 @@ namespace colite {
         }
 
         inline void* calloc(size_t n,size_t size) {
-            return ::calloc(n, size);
+            auto ptr = ::calloc(n, size);
+            allocated_memory_.try_emplace(ptr, n * size);
+            return ptr;
         }
 
         inline void free(void *ptr) {
             ::free(ptr);
+            allocated_memory_.erase(ptr);
         }
     }
 }

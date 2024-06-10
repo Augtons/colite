@@ -34,7 +34,6 @@ namespace colite {
 
         // 等待这个协程的人
         std::coroutine_handle<> awaiter_handle_{};
-        dispatcher *awaiter_dispatcher_ = nullptr;
     };
 }
 
@@ -73,8 +72,8 @@ namespace colite {
                         if (its_state->has_detached_) {
                             its_state->dispatcher_->cancel(handle);
                             handle.destroy();
-                        } else if (its_state->awaiter_handle_ && its_state->awaiter_dispatcher_) {
-                            its_state->awaiter_dispatcher_->dispatch(its_state->awaiter_handle_.address(), colite::port::time_duration(0),
+                        } else if (its_state->awaiter_handle_ && its_state->dispatcher_) {
+                            its_state->dispatcher_->dispatch(its_state->awaiter_handle_.address(), colite::port::time_duration(0),
                                 [handle, its_state, this] {
                                     its_state->awaiter_handle_.resume();
                                 },
