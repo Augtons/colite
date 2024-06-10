@@ -1,8 +1,13 @@
 #include <iostream>
-#include <functional>
 #include <memory>
 #include <atomic>
+#include <chrono>
+#include <ranges>
+#include <thread>
+
 #include "colite/colite.h"
+
+using namespace std::chrono_literals;
 
 std::atomic<size_t> allocated_size_ = 0;
 
@@ -28,13 +33,13 @@ public:
     [[nodiscard]]
     auto allocate(size_t n) -> value_type* {
         allocated_size_ += n * sizeof(value_type);
-        printf("-- TestAllocator: allocate %zu bytes\n", n * sizeof(value_type));
+        // printf("-- TestAllocator: allocate %zu bytes\n", n * sizeof(value_type));
         return (value_type*)calloc(n, sizeof(value_type));
     }
 
     void deallocate(value_type* pointer, size_t n) {
         allocated_size_ -= n * sizeof(value_type);
-        printf("-- TestAllocator: free %zu bytes\n", n * sizeof(value_type));
+        // printf("-- TestAllocator: free %zu bytes\n", n * sizeof(value_type));
         free(pointer);
     }
 };
@@ -49,34 +54,25 @@ auto operator != (const TestAllocator<T>&, const TestAllocator<U>&) {
     return false;
 }
 
+colite::eventloop_dispatcher<TestAllocator<std::byte>> dispatcher;
+
+colite::suspend<int, TestAllocator<std::byte>> data(const char* name) {
+    printf("[%s]%s\n", name, __PRETTY_FUNCTION__);
+    for (auto i : std::views::iota(0) | std::views::take(5)) {
+        co_await dispatcher.sleep(125ms);
+        printf("%s OK\n", name);
+    }
+    co_return 123;
+}
+
+colite::suspend<int, TestAllocator<std::byte>> async_main() {
+    printf("Hello\n");
+    printf("Bye: %d\n", co_await dispatcher.launch(data("c1")));
+    co_await 2s;
+    printf("Bye: %d\n", co_await dispatcher.launch(data("c1")));
+    co_return 123123;
+}
+
 int main() {
-    int d1 = 0;
-    int d2 = 0;
-
-    colite::callable<void(), TestAllocator<int>> f = [&] {
-    // std::function f = [&] {
-        ++d1;
-        printf("Hello World (%d, %d)\n", d1, d2);
-    };
-
-    auto g = f;
-
-    g = f;
-    g = std::move(f);
-
-    g();
-    g();
-
-    g = [&] {
-        ++d1;
-        ++d2;
-        printf("Hello World 2\n");
-        printf("Hello World 2 %d, %d\n", d1, d2);
-    };
-
-    g();
-
-    auto h = std::move(g);
-
-    h();
+    return dispatcher.run(async_main());
 }

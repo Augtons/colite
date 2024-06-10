@@ -11,17 +11,20 @@ if(WIN32)
   set(COLITE_PLATFORM "Windows")
 endif()
 
-file(GLOB_RECURSE LIB_SRCS "${COLITE_DIR}/Src/*.cpp"
-                           "${COLITE_DIR}/Port/${COLITE_PLATFORM}/*.cpp")
+if(NOT DEFINED COLITE_PORT_INCLUDE_DIR)
+  set(COLITE_PORT_INCLUDE_DIR "${COLITE_DIR}/Port/${COLITE_PLATFORM}")
+endif()
+
+file(GLOB_RECURSE LIB_SRCS "${COLITE_DIR}/Src/*.cpp")
 list(LENGTH LIB_SRCS LIB_SRCS_LEN)
 if(LIB_SRCS_LEN GREATER 0)
   add_library(colite STATIC ${LIB_SRCS})
   target_include_directories(colite PUBLIC "${COLITE_DIR}/Src/include"
-                                           "${COLITE_DIR}/Port/${COLITE_PLATFORM}")
+                                           "${COLITE_PORT_INCLUDE_DIR}")
 else()
   add_library(colite INTERFACE)
   target_include_directories(colite INTERFACE "${COLITE_DIR}/Src/include"
-                                              "${COLITE_DIR}/Port/${COLITE_PLATFORM}")
+                                              "${COLITE_PORT_INCLUDE_DIR}")
 endif()
 add_library(colite::colite ALIAS colite)
 unset(LIB_SRCS)
