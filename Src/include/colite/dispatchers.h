@@ -59,12 +59,12 @@ namespace colite {
         ) -> decltype(auto) {
             std::coroutine_handle<> handle = coroutine.get_coroutine_handle();
             colite_assert(handle);
-            coroutine.state_.value()->dispatcher_ = this;
+            coroutine.state_->dispatcher_ = this;
 
-            auto [it, ok] = coroutines_.try_emplace(handle, coroutine.state_.value());
+            auto [it, ok] = coroutines_.try_emplace(handle, coroutine.state_);
 
-            coroutine.state_.value()->state_ = colite::coroutine_status::STARTED;
-            dispatch(handle.address(), duration, [handle, its_state = coroutine.state_.value(), this] {
+            coroutine.state_->state_ = colite::coroutine_status::STARTED;
+            dispatch(handle.address(), duration, [handle, its_state = coroutine.state_, this] {
                 handle.resume();
                 dispatch(handle.address(), colite::port::time_duration(0),
                     [handle, its_state, this] {

@@ -1,0 +1,5 @@
+project(WinThreadPool)
+
+set(CMAKE_CXX_STANDARD 20)
+
+add_executable(WinThreadPool WinThreadPool.cpp)

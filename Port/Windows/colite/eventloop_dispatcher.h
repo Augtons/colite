@@ -5,7 +5,7 @@
 #include "colite/port.h"
 #include "colite/dispatchers.h"
 
-namespace colite {
+namespace colite::port {
     class eventloop_dispatcher: public colite::dispatcher {
         using byte_allocator = colite::allocator::allocator<std::byte>;
     public:

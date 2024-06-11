@@ -34,7 +34,7 @@ namespace colite {
                 if constexpr (colite::traits::is_std_chrono_duration<std::remove_cvref_t<Any>>) {
                     return state_->dispatcher_->sleep(std::forward<Any>(any));
                 } else if constexpr (colite::traits::is_suspend<std::remove_cvref_t<Any>>) {
-                    if (any && any.state_.value()->state_ == coroutine_status::CREATED) {
+                    if (any && any.state_->state_ == coroutine_status::CREATED) {
                         return state_->dispatcher_->launch(std::forward<Any>(any));
                     } else {
                         return std::forward<Any>(any);
@@ -100,7 +100,7 @@ namespace colite {
                 if constexpr (colite::traits::is_std_chrono_duration<std::remove_cvref_t<Any>>) {
                     return state_->dispatcher_->sleep(std::forward<Any>(any));
                 } else if constexpr (colite::traits::is_suspend<std::remove_cvref_t<Any>>) {
-                    if (any && any.state_.value()->state_ == coroutine_status::CREATED) {
+                    if (any && any.state_->state_ == coroutine_status::CREATED) {
                         return state_->dispatcher_->launch(std::forward<Any>(any));
                     } else {
                         return std::forward<Any>(any);
@@ -137,7 +137,9 @@ namespace colite {
         using promise_type = colite::detail::promise_type<suspend, T>;
 
         friend class colite::dispatcher;
-        friend class colite::detail::promise_type<suspend, T>;
+
+        template<typename S, typename R>
+        friend class colite::detail::promise_type;
 
         suspend() = default;
         suspend(const suspend&) = delete;
@@ -153,15 +155,15 @@ namespace colite {
         }
 
         ~suspend() {
-            if (!this_handle_) {
+            if (!*this) {
                 return;
             }
-            if (!state_.value()->dispatcher_) {
+            if (!state_->dispatcher_) {
                 // 协程已创建但未与调度器关联，由协程自身负责释放内存
                 cancel();
                 return;
             }
-            if (!state_.value()->has_detached_) {
+            if (!state_->has_detached_) {
                 cancel();
             }
         }
@@ -181,19 +183,19 @@ namespace colite {
 
         [[nodiscard]]
         auto await_ready() const -> bool {
-            if (!this_handle_) {
+            if (!*this) {
                 throw std::runtime_error("suspend<T> is null.");
             }
-            if (!state_.value()->dispatcher_) {
+            if (!state_->dispatcher_) {
                 throw std::runtime_error("suspend<T> is not associated with any dispatcher.");
             }
-            if (state_.value()->state_ == coroutine_status::CANCELED) {
+            if (state_->state_ == coroutine_status::CANCELED) {
                 throw std::runtime_error("suspend<T> is being `co_await` when it was cancelled.");
             }
-            if (state_.value()->has_detached_) {
+            if (state_->has_detached_) {
                 throw std::runtime_error("suspend<T> cannot be `co_await` when it has been detached!");
             }
-            if (state_.value()->awaiter_handle_ != nullptr) {
+            if (state_->awaiter_handle_ != nullptr) {
                 throw std::runtime_error("suspend<T> is being `co_await` twice or it was cancelled.");
             }
             return this_handle_.done();
@@ -201,19 +203,19 @@ namespace colite {
 
         template<typename Promise>
         void await_suspend(std::coroutine_handle<Promise> ext_handle) {
-            colite_assert(this_handle_ && state_.value()->dispatcher_);
-            if (state_.value()->state_ == coroutine_status::CANCELED) {
+            colite_assert(*this && state_->dispatcher_);
+            if (state_->state_ == coroutine_status::CANCELED) {
                 throw std::runtime_error("suspend<T> is being `co_await` when it was cancelled.");
             }
-            state_.value()->awaiter_handle_ = ext_handle;
-            if (state_.value()->state_ == colite::coroutine_status::CREATED) {
-                state_.value()->dispatcher_->launch(*this);
+            state_->awaiter_handle_ = ext_handle;
+            if (state_->state_ == colite::coroutine_status::CREATED) {
+                state_->dispatcher_->launch(*this);
             }
         }
 
         auto await_resume() -> T {
-            colite_assert(this_handle_ && state_.value()->dispatcher_);
-            if (!state_.value()->dispatcher_->coroutines_.contains(this_handle_)) {
+            colite_assert(*this && state_->dispatcher_);
+            if (!state_->dispatcher_->coroutines_.contains(this_handle_)) {
                 throw std::runtime_error("suspend<T> has been canceled.");
             }
             check_and_throw_exception();
@@ -236,10 +238,10 @@ namespace colite {
         }
 
         void check_and_throw_exception() {
-            if (!this_handle_ || !state_.value()->dispatcher_) {
+            if (!*this || !state_->dispatcher_) {
                 return;
             }
-            if (!state_.value()->dispatcher_->coroutines_.contains(this_handle_)) {
+            if (!state_->dispatcher_->coroutines_.contains(this_handle_)) {
                 return;
             }
             auto ex = this_handle_.promise().exception_ptr_;
@@ -251,32 +253,28 @@ namespace colite {
         }
 
         void detach() {
-            if (!this_handle_ || !state_.value()->dispatcher_) {
+            if (!*this || !state_->dispatcher_) {
                 return;
             }
-            state_.value()->has_detached_ = true;
-            if (state_.value()->state_ == coroutine_status::FINISHED) {
+            state_->has_detached_ = true;
+            if (state_->state_ == coroutine_status::FINISHED) {
                 cancel();
             }
         }
 
         void cancel() {
-            if (!this_handle_) {
+            if (!*this) {
                 return;
             }
-            if (state_.value()->dispatcher_) {
-                state_.value()->dispatcher_->cancel(this_handle_);
-                state_.value()->dispatcher_ = nullptr;
+            if (state_->dispatcher_) {
+                state_->dispatcher_->cancel(this_handle_);
+                state_->dispatcher_ = nullptr;
             }
             this_handle_.destroy();
             this_handle_ = nullptr;
         }
     private:
         std::coroutine_handle<promise_type> this_handle_ {};
-        std::optional<std::shared_ptr<colite::coroutine_state>> state_ = std::nullopt;
+        std::shared_ptr<colite::coroutine_state> state_ {};
     };
-
-    inline auto nop_coroutine() -> suspend<> {
-        co_return;
-    }
 }

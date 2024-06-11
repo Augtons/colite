@@ -2,9 +2,11 @@
 #include "colite/suspend.h"
 
 auto colite::dispatcher::sleep(colite::port::time_duration time) -> colite::suspend<> {
-    return launch([]() -> colite::suspend<> {
+    auto nop_coroutine = []() -> suspend<> {
         co_return;
-    }(), time);
+    };
+
+    return launch(nop_coroutine(), time);
 }
 
 void colite::dispatcher::cancel(std::coroutine_handle<> handle) {
