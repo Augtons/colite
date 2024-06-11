@@ -33,6 +33,12 @@ namespace colite {
             auto await_transform(Any&& any) -> decltype(auto) {
                 if constexpr (colite::traits::is_std_chrono_duration<std::remove_cvref_t<Any>>) {
                     return state_->dispatcher_->sleep(std::forward<Any>(any));
+                } else if constexpr (colite::traits::is_suspend<std::remove_cvref_t<Any>>) {
+                    if (any && any.state_.value()->state_ == coroutine_status::CREATED) {
+                        return state_->dispatcher_->launch(std::forward<Any>(any));
+                    } else {
+                        return std::forward<Any>(any);
+                    }
                 } else {
                     return std::forward<Any>(any);
                 }
@@ -93,6 +99,12 @@ namespace colite {
             auto await_transform(Any&& any) -> decltype(auto) {
                 if constexpr (colite::traits::is_std_chrono_duration<std::remove_cvref_t<Any>>) {
                     return state_->dispatcher_->sleep(std::forward<Any>(any));
+                } else if constexpr (colite::traits::is_suspend<std::remove_cvref_t<Any>>) {
+                    if (any && any.state_.value()->state_ == coroutine_status::CREATED) {
+                        return state_->dispatcher_->launch(std::forward<Any>(any));
+                    } else {
+                        return std::forward<Any>(any);
+                    }
                 } else {
                     return std::forward<Any>(any);
                 }
@@ -125,6 +137,7 @@ namespace colite {
         using promise_type = colite::detail::promise_type<suspend, T>;
 
         friend class colite::dispatcher;
+        friend class colite::detail::promise_type<suspend, T>;
 
         suspend() = default;
         suspend(const suspend&) = delete;
@@ -152,6 +165,9 @@ namespace colite {
                 cancel();
             }
         }
+
+        [[nodiscard]]
+        explicit operator bool() const { return this_handle_ != nullptr; }
 
         void swap(suspend& other) noexcept {
             std::swap(this_handle_, other.this_handle_);
