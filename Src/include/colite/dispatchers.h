@@ -7,35 +7,7 @@
 #include "colite/port.h"
 #include "colite/allocator.h"
 #include "colite/traits.h"
-
-namespace colite {
-    class dispatcher;
-
-    template<typename T = void>
-    class suspend;
-
-    // 协程状态
-    enum class coroutine_status {
-        CREATED,
-        STARTED,
-        FINISHED,
-        CANCELED,
-    };
-
-    struct coroutine_state {
-        // 调度器
-        dispatcher* dispatcher_ = nullptr;
-
-        // 当前协程的状态
-        coroutine_status status_ = coroutine_status::CREATED;
-
-        // 是否被遗忘
-        bool has_detached_ = false;
-
-        // 等待这个协程的人
-        std::coroutine_handle<> awaiter_handle_{};
-    };
-}
+#include "colite/state.h"
 
 namespace colite {
     // 调度器基类
@@ -59,28 +31,28 @@ namespace colite {
         ) -> decltype(auto) {
             std::coroutine_handle<> handle = coroutine.get_coroutine_handle();
             colite_assert(handle);
-            coroutine.state_->dispatcher_ = this;
+            coroutine.state_->set_dispatcher(this);
+            coroutine.state_->start();
 
-            auto [it, ok] = coroutines_.try_emplace(handle, coroutine.state_);
-
-            coroutine.state_->status_ = colite::coroutine_status::STARTED;
-            dispatch(handle.address(), duration, [handle, its_state = coroutine.state_, this] {
+            // 前往目标调度器上回复该协程
+            dispatch(handle.address(), duration, [handle, state = coroutine.state_, this] {
                 handle.resume();
+                // 当当前协程执行完毕之后，判断后续任务（是否要恢复等待者的协程），并销毁当前协程
                 dispatch(handle.address(), colite::port::time_duration(0),
-                    [handle, its_state, this] {
-                        its_state->status_ = colite::coroutine_status::FINISHED;
-                        if (its_state->has_detached_) {
-                            its_state->dispatcher_->cancel(handle);
-                            handle.destroy();
-                        } else if (its_state->awaiter_handle_ && its_state->dispatcher_) {
-                            its_state->dispatcher_->dispatch(its_state->awaiter_handle_.address(), colite::port::time_duration(0),
-                                [handle, its_state, this] {
-                                    its_state->awaiter_handle_.resume();
-                                },
-                                [=] {
-                                    return handle.done();
+                    [handle, state, this] {
+                        if (state->is_awaited()) {
+                            auto [awaiter_handle, awaiter_dispatcher] = state->awaiter();
+                            awaiter_dispatcher->dispatch(awaiter_handle.address(), colite::port::time_duration(0),
+                                [handle, awaiter_handle, this] {
+                                    awaiter_handle.resume();
                                 }
                             );
+                        }
+                        auto status = state->get_status();
+                        if (status != coroutine_status::CANCELED && status != coroutine_status::FINISHED) {
+                            state->finish();
+                            state->get_dispatcher()->destroy(handle);
+                            handle.destroy();
                         }
                     },
                     [=] {
@@ -93,19 +65,13 @@ namespace colite {
         }
 
     protected:
-        std::unordered_map<
-            std::coroutine_handle<>,
-            std::shared_ptr<colite::coroutine_state>,
-            std::hash<std::coroutine_handle<>>,
-            std::equal_to<std::coroutine_handle<>>,
-            colite::allocator::allocator<std::pair<const std::coroutine_handle<>, std::shared_ptr<colite::coroutine_state>>>
-        > coroutines_ {};
+        std::mutex lock_{};
 
         /**
          * @brief 取消所有与当前协程关联的任务，并从协程列表中删除该协程
          * @param handle 协程句柄
          */
-        void cancel(std::coroutine_handle<> handle);
+        void destroy(std::coroutine_handle<> handle);
 
         virtual void dispatch(void *id, colite::port::time_duration time, colite::callable<void()> callable) = 0;
         virtual void dispatch(void *id, colite::port::time_duration time, colite::callable<void()> callable, colite::callable<bool()> predicate) = 0;

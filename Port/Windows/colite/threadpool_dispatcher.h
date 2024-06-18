@@ -4,29 +4,36 @@
 #include "threadpoolapiset.h"
 #include "colite/port.h"
 #include "colite/dispatchers.h"
-#include "colite/atomic_lock.h"
 
 namespace colite::port {
     class threadpool_dispatcher: public colite::dispatcher {
     public:
+        struct job_task_args;
+
         class job {
         public:
             enum class Type { None, Work, Timer };
-            explicit job(void* id, PTP_WORK work): id_(id), type_(Type::Work), work_(work) {}
-            explicit job(void* id, PTP_TIMER timer): id_(id), type_(Type::Timer), timer_(timer) {}
+            explicit job(void* id, job_task_args* args, PTP_WORK work): id_(id), args_(args), type_(Type::Work), work_(work) {}
+            explicit job(void* id, job_task_args* args, PTP_TIMER timer): id_(id), args_(args), type_(Type::Timer), timer_(timer) {}
 
             [[nodiscard]]
             auto get_id() const -> void* { return id_; }
+
+            [[nodiscard]]
+            auto get_args() -> job_task_args* { return args_; }
+
+            [[nodiscard]]
+            auto get_args() const -> job_task_args* { return args_; }
 
             // 一定不要写成 ~job() 因为只有外部主动取消 job 的时候才需要等待并删除
             void close() {
                 switch (type_) {
                     case Type::Work: {
-                        WaitForThreadpoolWorkCallbacks(work_, true);
+                        CloseThreadpoolWork(work_);
                         break;
                     }
                     case Type::Timer: {
-                        WaitForThreadpoolTimerCallbacks(timer_, true);
+                        CloseThreadpoolTimer(timer_);
                         break;
                     }
                     default:
@@ -35,6 +42,7 @@ namespace colite::port {
             }
         private:
             void* id_ = nullptr;
+            job_task_args* args_ = nullptr;
             Type type_ = Type::None;
             union {
                 PTP_WORK work_ = nullptr;
@@ -44,7 +52,6 @@ namespace colite::port {
 
         struct job_task_args {
             threadpool_dispatcher& dispatcher_;
-            std::list<job, colite::allocator::allocator<job>>::iterator current_job_iterator_;
             colite::callable<void()> callable_;
             std::optional<colite::callable<bool()>> predicate_ = std::nullopt;
         };
@@ -122,18 +129,16 @@ namespace colite::port {
                 auto work = CreateThreadpoolWork(job_callback, args, &callback_environ_);
                 colite_assert(work);
                 {
-                    std::scoped_lock locker { lock_ };
-                    jobs_.emplace_back(id, work);
-                    args->current_job_iterator_ = std::prev(jobs_.end());
+                    std::lock_guard locker { lock_ };
+                    jobs_.emplace_back(id, args, work);
                 }
                 SubmitThreadpoolWork(work);
             } else {
                 auto timer = CreateThreadpoolTimer(job_scheduled_callback, args, &callback_environ_);
                 colite_assert(timer);
                 {
-                    std::scoped_lock locker { lock_ };
-                    jobs_.emplace_back(id, timer);
-                    args->current_job_iterator_ = std::prev(jobs_.end());
+                    std::lock_guard locker { lock_ };
+                    jobs_.emplace_back(id, args, timer);
                 }
 
                 auto microseconds = std::chrono::duration_cast<std::chrono::microseconds>(time).count();
@@ -167,18 +172,16 @@ namespace colite::port {
                 auto work = CreateThreadpoolWork(job_callback, args, &callback_environ_);
                 colite_assert(work);
                 {
-                    std::scoped_lock locker { lock_ };
-                    jobs_.emplace_back(id, work);
-                    args->current_job_iterator_ = std::prev(jobs_.end());
+                    std::lock_guard locker { lock_ };
+                    jobs_.emplace_back(id, args, work);
                 }
                 SubmitThreadpoolWork(work);
             } else {
                 auto timer = CreateThreadpoolTimer(job_scheduled_callback, args, &callback_environ_);
                 colite_assert(timer);
                 {
-                    std::scoped_lock locker { lock_ };
-                    jobs_.emplace_back(id, timer);
-                    args->current_job_iterator_ = std::prev(jobs_.end());
+                    std::lock_guard locker { lock_ };
+                    jobs_.emplace_back(id, args, timer);
                 }
 
                 auto microseconds = std::chrono::duration_cast<std::chrono::microseconds>(time).count();
@@ -196,16 +199,30 @@ namespace colite::port {
         }
 
         void cancel_jobs(void *id) override {
-            
-            std::scoped_lock locker { lock_ };
-            jobs_.remove_if([=](job& it) {
-                if (id == it.get_id()) {
-                    it.close();
-                    return true;
-                }
-                return false;
-            });
-            
+            decltype(jobs_) temp{};
+            {
+                std::lock_guard locker { lock_ };
+
+                jobs_.remove_if([&](job& it) {
+                    if (id == it.get_id()) {
+                        temp.emplace_back(std::move(it));
+                        return true;
+                    }
+                    return false;
+                });
+            }
+
+            for (job& it : temp) {
+                it.close();
+            }
+            // std::scoped_lock locker { lock_ };
+            // jobs_.remove_if([=](job& it) {
+            //     if (id == it.get_id()) {
+            //         it.close();
+            //         return true;
+            //     }
+            //     return false;
+            // });
         }
 
         static VOID CALLBACK job_callback(PTP_CALLBACK_INSTANCE Instance, PVOID Parameter, PTP_WORK Work) {
@@ -214,12 +231,6 @@ namespace colite::port {
 
             }
             args->callable_();
-
-            {
-                std::scoped_lock locker { args->dispatcher_.lock_ };
-                args->dispatcher_.jobs_.erase(args->current_job_iterator_);
-            }
-
             args->~job_task_args();
             colite::port::free(args);
         }
@@ -230,12 +241,6 @@ namespace colite::port {
 
             }
             args->callable_();
-
-            {
-                std::scoped_lock locker { args->dispatcher_.lock_ };
-                args->dispatcher_.jobs_.erase(args->current_job_iterator_);
-            }
-
             args->~job_task_args();
             colite::port::free(args);
         }

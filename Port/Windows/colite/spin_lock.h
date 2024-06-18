@@ -3,17 +3,16 @@
 #include <atomic>
 
 namespace colite::port {
-    class atomic_lock {
+    class spin_lock {
     public:
-        atomic_lock() = default;
+        spin_lock() = default;
 
-        atomic_lock(const atomic_lock&) = delete;
-        atomic_lock& operator=(const atomic_lock&) = delete;
+        spin_lock(const spin_lock&) = delete;
+        spin_lock& operator=(const spin_lock&) = delete;
 
         void lock() {
             while (locked_.test_and_set(std::memory_order_acquire)) {
-                printf("Pending\n");
-                std::this_thread::sleep_for(std::chrono::seconds(1));
+                ;
             }
         }
 

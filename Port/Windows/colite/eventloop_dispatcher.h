@@ -64,7 +64,6 @@ namespace colite::port {
         auto run(Coro&& coroutine) {
             bool finished;
             auto&& coro = this->launch(std::forward<Coro>(coroutine));
-            auto it = this->coroutines_.find(coro.get_coroutine_handle());
             while (true) {
                 coro.check_and_throw_exception();
                 {
