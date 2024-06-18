@@ -42,8 +42,8 @@ namespace colite::port {
                 }
             }
 
-            auto operator()() const {
-                return callable();
+            void operator()() const {
+                callable();
             }
 
             [[nodiscard]]
