@@ -6,129 +6,127 @@
 #include "colite/traits.h"
 #include "colite/dispatchers.h"
 
-namespace colite {
-    namespace detail {
-        template<typename Coro, typename R>
-        class promise_type {
-            template<typename T>
-            friend class colite::suspend;
+namespace colite::detail {
+    template<typename Promise>
+    class base_promise {
+        template<typename T>
+        friend class colite::suspend;
+    public:
+        std::suspend_always initial_suspend() noexcept { return {}; }
+        std::suspend_always final_suspend() noexcept { return {}; }
 
-            using return_value_type = std::conditional_t<
-                std::is_reference_v<R>,
-                std::add_pointer_t<std::remove_reference_t<R>>,
-                std::optional<R>
-            >;
-
-        public:
-            auto get_return_object() -> Coro {
-                this_handle_ = std::coroutine_handle<promise_type>::from_promise(*this);
-                state_ = std::allocate_shared<colite::coroutine_state, colite::allocator::allocator<std::byte>>({});
-                return Coro { this_handle_, state_ };
-            }
-
-            std::suspend_always initial_suspend() noexcept { return {}; }
-            std::suspend_always final_suspend() noexcept { return {}; }
-
-            template<typename Any>
-            auto await_transform(Any&& any) -> decltype(auto) {
-                if constexpr (colite::traits::is_std_chrono_duration<std::remove_cvref_t<Any>>) {
-                    return state_->dispatcher_->sleep(std::forward<Any>(any));
-                } else if constexpr (colite::traits::is_suspend<std::remove_cvref_t<Any>>) {
-                    if (any && any.state_->state_ == coroutine_status::CREATED) {
-                        return state_->dispatcher_->launch(std::forward<Any>(any));
-                    } else {
-                        return std::forward<Any>(any);
-                    }
+        template<typename Any>
+        auto await_transform(Any&& any) -> decltype(auto) {
+            if constexpr (colite::traits::is_std_chrono_duration<std::remove_cvref_t<Any>>) {
+                return state_->dispatcher_->sleep(std::forward<Any>(any));
+            } else if constexpr (colite::traits::is_suspend<std::remove_cvref_t<Any>>) {
+                if (any && any.state_->status_ == coroutine_status::CREATED) {
+                    return state_->dispatcher_->launch(std::forward<Any>(any));
                 } else {
                     return std::forward<Any>(any);
                 }
+            } else {
+                return std::forward<Any>(any);
             }
+        }
 
-            void return_value(R&& ret) {
-                if constexpr (std::is_reference_v<R>) {
-                    ret_value_ = std::addressof(ret);
-                } else {
-                    ret_value_ = std::move(ret);
-                }
+        void unhandled_exception() {
+            exception_ptr_ = std::current_exception();
+        }
+
+        void* operator new(std::size_t n) {
+            return colite::port::calloc(n, sizeof(std::byte));
+        }
+
+        void operator delete(void* ptr, size_t n) noexcept {
+            colite::port::free(ptr);
+        }
+
+    protected:
+        std::coroutine_handle<Promise> this_handle_;
+        std::exception_ptr exception_ptr_;
+        std::shared_ptr<colite::coroutine_state> state_;
+    };
+
+
+    template<typename Coro, typename R>
+    class promise_type: public base_promise<promise_type<Coro, R>> {
+        template<typename T>
+        friend class colite::suspend;
+
+        using base_promise_t = base_promise<promise_type>;
+    public:
+        using base_promise_t::initial_suspend;
+        using base_promise_t::final_suspend;
+        using base_promise_t::await_transform;
+        using base_promise_t::unhandled_exception;
+        using base_promise_t::operator new;
+        using base_promise_t::operator delete;
+
+        auto get_return_object() -> Coro {
+            this_handle_ = std::coroutine_handle<promise_type>::from_promise(*this);
+            state_ = std::allocate_shared<colite::coroutine_state, colite::allocator::allocator<std::byte>>({});
+            return Coro { this_handle_, state_ };
+        }
+
+        void return_value(R&& ret) {
+            if constexpr (std::is_reference_v<R>) {
+                ret_value_ = std::addressof(ret);
+            } else {
+                ret_value_ = std::move(ret);
             }
+        }
 
-            void return_value(const R& ret) {
-                if constexpr (std::is_reference_v<R>) {
-                    ret_value_ = std::addressof(ret);
-                } else {
-                    ret_value_ = ret;
-                }
+        void return_value(const R& ret) {
+            if constexpr (std::is_reference_v<R>) {
+                ret_value_ = std::addressof(ret);
+            } else {
+                ret_value_ = ret;
             }
+        }
 
-            void unhandled_exception() {
-                exception_ptr_ = std::current_exception();
-            }
+    protected:
+        using return_value_type = std::conditional_t<
+            std::is_reference_v<R>,
+            std::add_pointer_t<std::remove_reference_t<R>>,
+            std::optional<R>
+        >;
+        using base_promise_t::this_handle_;
+        using base_promise_t::exception_ptr_;
+        using base_promise_t::state_;
 
-            void* operator new(std::size_t n) {
-                return colite::port::calloc(n, sizeof(std::byte));
-            }
+        return_value_type ret_value_{};
+    };
 
-            void operator delete(void* ptr, size_t n) noexcept {
-                colite::port::free(ptr);
-            }
+    template<typename Coro>
+    class promise_type<Coro, void> : base_promise<promise_type<Coro, void>> {
+        template<typename T>
+        friend class colite::suspend;
 
-        private:
-            std::coroutine_handle<promise_type> this_handle_;
-            return_value_type ret_value_{};
-            std::exception_ptr exception_ptr_;
-            std::shared_ptr<colite::coroutine_state> state_;
-        };
+        using base_promise_t = base_promise<promise_type>;
+    public:
+        using base_promise_t::initial_suspend;
+        using base_promise_t::final_suspend;
+        using base_promise_t::await_transform;
+        using base_promise_t::unhandled_exception;
+        using base_promise_t::operator new;
+        using base_promise_t::operator delete;
 
-        template<typename Coro>
-        class promise_type<Coro, void> {
-            template<typename T>
-            friend class colite::suspend;
+        auto get_return_object() -> Coro {
+            this_handle_ = std::coroutine_handle<promise_type>::from_promise(*this);
+            state_ = std::allocate_shared<colite::coroutine_state, colite::allocator::allocator<std::byte>>({});
+            return Coro { this_handle_, state_ };
+        }
 
-        public:
-            auto get_return_object() -> Coro {
-                this_handle_ = std::coroutine_handle<promise_type>::from_promise(*this);
-                state_ = std::allocate_shared<colite::coroutine_state, colite::allocator::allocator<std::byte>>({});
-                return Coro { this_handle_, state_ };
-            }
+        void return_void() { }
 
-            std::suspend_always initial_suspend() noexcept { return {}; }
-            std::suspend_always final_suspend() noexcept { return {}; }
-            void return_void() { }
-
-            template<typename Any>
-            auto await_transform(Any&& any) -> decltype(auto) {
-                if constexpr (colite::traits::is_std_chrono_duration<std::remove_cvref_t<Any>>) {
-                    return state_->dispatcher_->sleep(std::forward<Any>(any));
-                } else if constexpr (colite::traits::is_suspend<std::remove_cvref_t<Any>>) {
-                    if (any && any.state_->state_ == coroutine_status::CREATED) {
-                        return state_->dispatcher_->launch(std::forward<Any>(any));
-                    } else {
-                        return std::forward<Any>(any);
-                    }
-                } else {
-                    return std::forward<Any>(any);
-                }
-            }
-
-            void unhandled_exception() {
-                exception_ptr_ = std::current_exception();
-            }
-
-            void* operator new(std::size_t n) {
-                return colite::port::calloc(n, sizeof(std::byte));
-            }
-
-            void operator delete(void* ptr, size_t n) noexcept {
-                colite::port::free(ptr);
-            }
-
-        private:
-            std::coroutine_handle<promise_type> this_handle_;
-            std::exception_ptr exception_ptr_;
-            std::shared_ptr<colite::coroutine_state> state_;
-        };
-    }
+    protected:
+        using base_promise_t::this_handle_;
+        using base_promise_t::exception_ptr_;
+        using base_promise_t::state_;
+    };
 }
+
 
 namespace colite {
     template<typename T>
@@ -138,8 +136,8 @@ namespace colite {
 
         friend class colite::dispatcher;
 
-        template<typename S, typename R>
-        friend class colite::detail::promise_type;
+        template<typename Coro, typename Promise>
+        friend class colite::detail::base_promise;
 
         suspend() = default;
         suspend(const suspend&) = delete;
@@ -189,7 +187,7 @@ namespace colite {
             if (!state_->dispatcher_) {
                 throw std::runtime_error("suspend<T> is not associated with any dispatcher.");
             }
-            if (state_->state_ == coroutine_status::CANCELED) {
+            if (state_->status_ == coroutine_status::CANCELED) {
                 throw std::runtime_error("suspend<T> is being `co_await` when it was cancelled.");
             }
             if (state_->has_detached_) {
@@ -204,11 +202,11 @@ namespace colite {
         template<typename Promise>
         void await_suspend(std::coroutine_handle<Promise> ext_handle) {
             colite_assert(*this && state_->dispatcher_);
-            if (state_->state_ == coroutine_status::CANCELED) {
+            if (state_->status_ == coroutine_status::CANCELED) {
                 throw std::runtime_error("suspend<T> is being `co_await` when it was cancelled.");
             }
             state_->awaiter_handle_ = ext_handle;
-            if (state_->state_ == colite::coroutine_status::CREATED) {
+            if (state_->status_ == colite::coroutine_status::CREATED) {
                 state_->dispatcher_->launch(*this);
             }
         }
@@ -257,7 +255,7 @@ namespace colite {
                 return;
             }
             state_->has_detached_ = true;
-            if (state_->state_ == coroutine_status::FINISHED) {
+            if (state_->status_ == coroutine_status::FINISHED) {
                 cancel();
             }
         }

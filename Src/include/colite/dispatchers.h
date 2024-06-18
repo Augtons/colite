@@ -27,7 +27,7 @@ namespace colite {
         dispatcher* dispatcher_ = nullptr;
 
         // 当前协程的状态
-        coroutine_status state_ = coroutine_status::CREATED;
+        coroutine_status status_ = coroutine_status::CREATED;
 
         // 是否被遗忘
         bool has_detached_ = false;
@@ -63,12 +63,12 @@ namespace colite {
 
             auto [it, ok] = coroutines_.try_emplace(handle, coroutine.state_);
 
-            coroutine.state_->state_ = colite::coroutine_status::STARTED;
+            coroutine.state_->status_ = colite::coroutine_status::STARTED;
             dispatch(handle.address(), duration, [handle, its_state = coroutine.state_, this] {
                 handle.resume();
                 dispatch(handle.address(), colite::port::time_duration(0),
                     [handle, its_state, this] {
-                        its_state->state_ = colite::coroutine_status::FINISHED;
+                        its_state->status_ = colite::coroutine_status::FINISHED;
                         if (its_state->has_detached_) {
                             its_state->dispatcher_->cancel(handle);
                             handle.destroy();
