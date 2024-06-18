@@ -106,7 +106,7 @@ namespace colite {
         }
 
         /**
-         * @brief 调用表达式
+         * @brief 调用 const 表达式
          * @param args 参数
          * @return 返回值
          */
@@ -114,6 +114,20 @@ namespace colite {
         auto operator()(Args&&... args) const {
             if (is_sso()) {
                 return reinterpret_cast<const target_wrapper_type*>(target_wrapper_data_.sso.target_buf_.data())->operator()(std::forward<Args>(args)...);
+            } else {
+                return target_wrapper_data_.no_sso.target_ptr_->operator()(std::forward<Args>(args)...);
+            }
+        }
+
+        /**
+         * @brief 调用表达式
+         * @param args 参数
+         * @return 返回值
+         */
+        template<typename... Args>
+        auto operator()(Args&&... args) {
+            if (is_sso()) {
+                return reinterpret_cast<target_wrapper_type*>(target_wrapper_data_.sso.target_buf_.data())->operator()(std::forward<Args>(args)...);
             } else {
                 return target_wrapper_data_.no_sso.target_ptr_->operator()(std::forward<Args>(args)...);
             }
