@@ -6,8 +6,8 @@
 
 #define colite_assert(...) assert(__VA_ARGS__)
 
-inline std::unordered_map<void*, size_t> allocated_memory_ {};
-inline struct Leak {
+inline class Leak {
+public:
     Leak() = default;
     Leak(const Leak&) = delete;
     Leak& operator=(const Leak&) = delete;
@@ -17,6 +17,19 @@ inline struct Leak {
             printf("%p: %zu\n", ptr, size);
         }
     }
+
+    void allocate(void* ptr, size_t size) {
+        std::lock_guard locker { lock_ };
+        allocated_memory_.try_emplace(ptr, size);
+    }
+
+    void deallocate(void* ptr) {
+        std::lock_guard locker { lock_ };
+        allocated_memory_.erase(ptr);
+    }
+private:
+    std::mutex lock_{};
+    std::unordered_map<void*, size_t> allocated_memory_ {};
 } leak_ {};
 
 namespace colite {
@@ -30,13 +43,13 @@ namespace colite {
 
         inline void* calloc(size_t n,size_t size) {
             auto ptr = ::calloc(n, size);
-            allocated_memory_.try_emplace(ptr, n * size);
+            leak_.allocate(ptr, n * size);
             return ptr;
         }
 
         inline void free(void *ptr) {
             ::free(ptr);
-            allocated_memory_.erase(ptr);
+            leak_.deallocate(ptr);
         }
     }
 }
