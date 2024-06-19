@@ -7,7 +7,6 @@
 
 namespace colite::port {
     class eventloop_dispatcher: public colite::dispatcher {
-        using byte_allocator = colite::allocator::allocator<std::byte>;
     public:
         class job {
         public:
@@ -79,10 +78,8 @@ namespace colite::port {
         }
 
     private:
-        byte_allocator allocator_;
         std::recursive_mutex lock_ {};
-        std::list<job, std::allocator_traits<byte_allocator>::rebind_alloc<job>>
-            jobs_ { allocator_ };
+        std::list<job, colite::allocator::allocator<job>> jobs_ {};
 
         void dispatch(
             void *id,
