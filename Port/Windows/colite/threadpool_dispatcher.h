@@ -199,30 +199,23 @@ namespace colite::port {
         }
 
         void cancel_jobs(void *id) override {
-            decltype(jobs_) temp{};
+            std::list<job, colite::allocator::allocator<job>> temp{};
             {
                 std::lock_guard locker { lock_ };
-
-                jobs_.remove_if([&](job& it) {
-                    if (id == it.get_id()) {
-                        temp.emplace_back(std::move(it));
-                        return true;
+                for (auto it = jobs_.begin(); it != jobs_.end();) {
+                    if (id != it->get_id()) {
+                        ++it;
+                        continue;
                     }
-                    return false;
-                });
+                    auto current = it;
+                    ++it;
+                    temp.splice(temp.cend(), jobs_, current);
+                }
             }
 
             for (job& it : temp) {
                 it.close();
             }
-            // std::scoped_lock locker { lock_ };
-            // jobs_.remove_if([=](job& it) {
-            //     if (id == it.get_id()) {
-            //         it.close();
-            //         return true;
-            //     }
-            //     return false;
-            // });
         }
 
         static VOID CALLBACK job_callback(PTP_CALLBACK_INSTANCE Instance, PVOID Parameter, PTP_WORK Work) {
