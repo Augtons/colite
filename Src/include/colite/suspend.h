@@ -261,6 +261,7 @@ namespace colite {
             if (dispatcher) {
                 dispatcher->cancel(this_handle_);
             }
+            this_handle_.destroy();
         }
     protected:
         std::coroutine_handle<promise_type> this_handle_ {};

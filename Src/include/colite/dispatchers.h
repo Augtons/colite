@@ -42,7 +42,7 @@ namespace colite {
                     [handle, state, this] {
                         if (state->is_awaited()) {
                             auto [awaiter_handle, awaiter_dispatcher] = state->awaiter();
-                            awaiter_dispatcher->dispatch(awaiter_handle.address(), colite::port::time_duration(0),
+                            awaiter_dispatcher->dispatch(handle.address(), colite::port::time_duration(0),
                                 [handle, awaiter_handle, this] {
                                     awaiter_handle.resume();
                                 }
