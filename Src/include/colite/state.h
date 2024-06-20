@@ -78,15 +78,14 @@ namespace colite {
         /**
          * @brief 设置协程状态
          */
-        void start() { status_ = coroutine_status::STARTED; }
-        void finish() { status_ = coroutine_status::FINISHED; }
-        void cancel() { status_ = coroutine_status::CANCELED; }
+        void set_status(coroutine_status status) { status_ = status; }
+
     protected:
         // 当前协程的调度器
         dispatcher* dispatcher_ = nullptr;
 
         // 当前协程的状态
-        coroutine_status status_ = coroutine_status::CREATED;
+        volatile coroutine_status status_ = coroutine_status::CREATED;
         std::exception_ptr exception_ptr_{};
 
         // 等待这个协程的人

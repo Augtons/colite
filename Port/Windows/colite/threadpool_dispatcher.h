@@ -8,13 +8,63 @@
 namespace colite::port {
     class threadpool_dispatcher: public colite::dispatcher {
     public:
-        struct job_task_args;
-
         class job {
         public:
+            job(
+                void *id,
+                colite::port::time_duration time,
+                colite::callable<void()> callable
+            ): id(id),
+               ready_time(colite::port::current_time() + time),
+               callable(std::move(callable))
+            {
+            }
+
+            job(
+                void *id,
+                colite::port::time_duration time,
+                colite::callable<void()> callable,
+                colite::callable<bool()> predicate
+            ): id(id),
+               ready_time(colite::port::current_time() + time),
+               callable(std::move(callable)),
+               predicate(std::move(predicate))
+            {
+            }
+
+            [[nodiscard]]
+            auto ready() const -> bool {
+                if (predicate) {
+                    return ready_time <= colite::port::current_time() && predicate.value()();
+                } else {
+                    return ready_time <= colite::port::current_time();
+                }
+            }
+
+            [[nodiscard]]
+            auto get_id() const -> void* { return id; }
+
+            [[nodiscard]]
+            auto get_callable() const& -> colite::callable<void()> { return callable; }
+            auto get_callable() & -> colite::callable<void()> { return callable; }
+            auto get_callable() && -> colite::callable<void()> { return std::move(callable); }
+
+        private:
+            void *id;
+            colite::port::time_point ready_time;
+            colite::callable<void()> callable;
+            std::optional<colite::callable<bool()>> predicate = std::nullopt;
+        };
+
+        struct job_task_args;
+
+        class threadpool_job {
+        public:
             enum class Type { None, Work, Timer };
-            explicit job(void* id, job_task_args* args, PTP_WORK work): id_(id), args_(args), type_(Type::Work), work_(work) {}
-            explicit job(void* id, job_task_args* args, PTP_TIMER timer): id_(id), args_(args), type_(Type::Timer), timer_(timer) {}
+            explicit threadpool_job(void* id, job_task_args* args, PTP_WORK work):
+                id_(id), args_(args), type_(Type::Work), handle_{.work_ = work} { }
+            explicit threadpool_job(void* id, job_task_args* args, PTP_TIMER timer):
+                id_(id), args_(args), type_(Type::Timer), handle_{.timer_ = timer} { }
 
             [[nodiscard]]
             auto get_id() const -> void* { return id_; }
@@ -25,15 +75,14 @@ namespace colite::port {
             [[nodiscard]]
             auto get_args() const -> job_task_args* { return args_; }
 
-            // 一定不要写成 ~job() 因为只有外部主动取消 job 的时候才需要等待并删除
-            void close() {
+            ~threadpool_job() {
                 switch (type_) {
                     case Type::Work: {
-                        CloseThreadpoolWork(work_);
+                        CloseThreadpoolWork(handle_.work_);
                         break;
                     }
                     case Type::Timer: {
-                        CloseThreadpoolTimer(timer_);
+                        CloseThreadpoolTimer(handle_.timer_);
                         break;
                     }
                     default:
@@ -41,19 +90,19 @@ namespace colite::port {
                 }
             }
         private:
-            void* id_ = nullptr;
-            job_task_args* args_ = nullptr;
-            Type type_ = Type::None;
-            union {
+            void* const id_ = nullptr;
+            job_task_args* const args_ = nullptr;
+            const Type type_ = Type::None;
+            const union {
                 PTP_WORK work_ = nullptr;
                 PTP_TIMER timer_;
-            };
+            } handle_;
         };
 
         struct job_task_args {
             threadpool_dispatcher& dispatcher_;
+            threadpool_job job_;
             colite::callable<void()> callable_;
-            std::optional<colite::callable<bool()>> predicate_ = std::nullopt;
         };
 
         explicit threadpool_dispatcher(DWORD minimum_thread_count = 5, DWORD maximun_thread_count = 10)
@@ -64,9 +113,9 @@ namespace colite::port {
 
             thread_pool_ = CreateThreadpool(nullptr);
             if (!thread_pool_) {
-                cleanup();
                 char error_message[48];
                 snprintf(error_message, sizeof(error_message), "CreateThreadpool failed. LastError: %lu", GetLastError());
+                cleanup();
                 throw std::runtime_error(error_message);
             }
             SetThreadpoolThreadMaximum(thread_pool_, maximun_thread_count);
@@ -75,12 +124,21 @@ namespace colite::port {
 
             cleanup_group_ = CreateThreadpoolCleanupGroup();
             if (!cleanup_group_) {
-                cleanup();
                 char error_message[48];
                 snprintf(error_message, sizeof(error_message), "CreateThreadpoolCleanupGroup failed. LastError: %lu", GetLastError());
+                cleanup();
                 throw std::runtime_error(error_message);
             }
             SetThreadpoolCallbackCleanupGroup(&callback_environ_, cleanup_group_, nullptr);
+
+            auto operator_work = CreateThreadpoolWork(dispatcher_operator, this, &callback_environ_);
+            if (!operator_work) {
+                char error_message[48];
+                snprintf(error_message, sizeof(error_message), "Create Operator task failed. LastError: %lu", GetLastError());
+                cleanup();
+                throw std::runtime_error(error_message);
+            }
+            SubmitThreadpoolWork(operator_work);
         }
 
         ~threadpool_dispatcher() override {
@@ -96,15 +154,49 @@ namespace colite::port {
             std::swap(thread_pool_, other.thread_pool_);
         }
 
+        void close() noexcept {
+            this->~threadpool_dispatcher();
+        }
+
+    protected:
+        void dispatch(
+            void *id,
+            colite::port::time_duration time,
+            colite::callable<void()> callable
+        ) override {
+            std::lock_guard locker { lock_ };
+            jobs_.emplace_back(id, time, std::move(callable));
+        }
+
+        void dispatch(
+            void *id,
+            colite::port::time_duration time,
+            colite::callable<void()> callable,
+            colite::callable<bool()> predicate
+        ) override {
+            std::lock_guard locker { lock_ };
+            jobs_.emplace_back(id, time, std::move(callable), std::move(predicate));
+        }
+
+        void cancel_jobs(void *id) override {
+            std::lock_guard locker { lock_ };
+            jobs_.remove_if([=] (const job& it) {
+                 return id == it.get_id();
+            });
+        }
+
     private:
         TP_CALLBACK_ENVIRON callback_environ_ {};
         PTP_CLEANUP_GROUP cleanup_group_ = nullptr;
         PTP_POOL thread_pool_ = nullptr;
 
+        std::atomic<bool> stop_request_ = false;
+
         std::mutex lock_ {};
         std::list<job, colite::allocator::allocator<job>> jobs_ {  };
 
         void cleanup() {
+            stop_request_ = true;
             if (cleanup_group_) {
                 CloseThreadpoolCleanupGroupMembers(cleanup_group_, false, nullptr);
                 CloseThreadpoolCleanupGroup(cleanup_group_);
@@ -114,125 +206,52 @@ namespace colite::port {
             }
         }
 
-        void dispatch(
-            void *id,
-            colite::port::time_duration time,
-            colite::callable<void()> callable
-        ) override {
-            auto* args = (job_task_args*)colite::port::calloc(1, sizeof(job_task_args));
-            ::new (args) job_task_args {
-                .dispatcher_ = *this,
-                .callable_ = std::move(callable)
-            };
+        static VOID CALLBACK dispatcher_operator(PTP_CALLBACK_INSTANCE Instance, PVOID Parameter, PTP_WORK Work) {
+            auto* self = static_cast<threadpool_dispatcher*>(Parameter);
 
-            if (time.count() <= 0) {
-                auto work = CreateThreadpoolWork(job_callback, args, &callback_environ_);
-                colite_assert(work);
+            auto& jobs_ = self->jobs_;
+            auto& lock_ = self->lock_;
+            auto& stop_request = self->stop_request_;
+
+            while (!stop_request) {
+                std::optional<job> job = std::nullopt;
                 {
                     std::lock_guard locker { lock_ };
-                    jobs_.emplace_back(id, args, work);
-                }
-                SubmitThreadpoolWork(work);
-            } else {
-                auto timer = CreateThreadpoolTimer(job_scheduled_callback, args, &callback_environ_);
-                colite_assert(timer);
-                {
-                    std::lock_guard locker { lock_ };
-                    jobs_.emplace_back(id, args, timer);
-                }
-
-                auto microseconds = std::chrono::duration_cast<std::chrono::microseconds>(time).count();
-                ULARGE_INTEGER ulDueTime {
-                    // 1. 下方 SetThreadpoolTimer 要求单位为 100ns
-                    // 2. QuadPart 为负数表示相对时长，QuadPart 为正数表示绝对时刻
-                    .QuadPart = (ULONGLONG)-(microseconds * 10)
-                };
-                FILETIME file_due_time {
-                    .dwLowDateTime = ulDueTime.LowPart,
-                    .dwHighDateTime = ulDueTime.HighPart,
-                };
-                SetThreadpoolTimer(timer, &file_due_time, 0, 0);
-            }
-        }
-
-        void dispatch(
-            void *id,
-            colite::port::time_duration time,
-            colite::callable<void()> callable,
-            colite::callable<bool()> predicate
-        ) override {
-            auto* args = (job_task_args*)colite::port::calloc(1, sizeof(job_task_args));
-            ::new (args) job_task_args {
-                .dispatcher_ = *this,
-                .callable_ = std::move(callable),
-                .predicate_ = std::move(predicate)
-            };
-
-            if (time.count() <= 0) {
-                auto work = CreateThreadpoolWork(job_callback, args, &callback_environ_);
-                colite_assert(work);
-                {
-                    std::lock_guard locker { lock_ };
-                    jobs_.emplace_back(id, args, work);
-                }
-                SubmitThreadpoolWork(work);
-            } else {
-                auto timer = CreateThreadpoolTimer(job_scheduled_callback, args, &callback_environ_);
-                colite_assert(timer);
-                {
-                    std::lock_guard locker { lock_ };
-                    jobs_.emplace_back(id, args, timer);
-                }
-
-                auto microseconds = std::chrono::duration_cast<std::chrono::microseconds>(time).count();
-                ULARGE_INTEGER ulDueTime {
-                    // 1. 下方 SetThreadpoolTimer 要求单位为 100ns
-                    // 2. QuadPart 为负数表示相对时长，QuadPart 为正数表示绝对时刻
-                    .QuadPart = (ULONGLONG)-(microseconds * 10)
-                };
-                FILETIME file_due_time {
-                    .dwLowDateTime = ulDueTime.LowPart,
-                    .dwHighDateTime = ulDueTime.HighPart,
-                };
-                SetThreadpoolTimer(timer, &file_due_time, 0, 0);
-            }
-        }
-
-        void cancel_jobs(void *id) override {
-            std::list<job, colite::allocator::allocator<job>> temp{};
-            {
-                std::lock_guard locker { lock_ };
-                for (auto it = jobs_.begin(); it != jobs_.end();) {
-                    if (id != it->get_id()) {
-                        ++it;
+                    if (jobs_.empty()) {
                         continue;
                     }
-                    auto current = it;
-                    ++it;
-                    temp.splice(temp.cend(), jobs_, current);
+                    if (jobs_.front().ready()) {
+                        job = std::move(jobs_.front());
+                        jobs_.pop_front();
+                    } else {
+                        jobs_.splice(jobs_.cend(), jobs_, jobs_.cbegin());
+                    }
+                }
+                if (job) {
+                    self->start_dispatch(job->get_id(), std::move(job).value().get_callable());
                 }
             }
+        }
 
-            for (job& it : temp) {
-                it.close();
-            }
+        void start_dispatch(
+            void *id,
+            colite::callable<void()> callable
+        ) {
+            auto* args = (job_task_args*)colite::port::calloc(1, sizeof(job_task_args));
+
+            auto work = CreateThreadpoolWork(job_callback, args, &callback_environ_);
+            colite_assert(work);
+
+            ::new (args) job_task_args {
+                .dispatcher_ = *this,
+                .job_ = threadpool_job(id, args, work),
+                .callable_ = std::move(callable)
+            };
+            SubmitThreadpoolWork(work);
         }
 
         static VOID CALLBACK job_callback(PTP_CALLBACK_INSTANCE Instance, PVOID Parameter, PTP_WORK Work) {
             auto* args = static_cast<job_task_args*>(Parameter);
-            while(args->predicate_ && !args->predicate_.value()()) {
-
-            }
-            args->callable_();
-            args->~job_task_args();
-            colite::port::free(args);
-        }
-
-        static VOID CALLBACK job_scheduled_callback(PTP_CALLBACK_INSTANCE Instance, PVOID Parameter, PTP_TIMER Timer) {
-            auto* args = static_cast<job_task_args*>(Parameter);
-            while(args->predicate_ && !args->predicate_.value()()) {
-
-            }
             args->callable_();
             args->~job_task_args();
             colite::port::free(args);

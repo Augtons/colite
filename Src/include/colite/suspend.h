@@ -13,7 +13,6 @@ namespace colite::detail {
         friend class colite::suspend;
     public:
         std::suspend_always initial_suspend() noexcept { return {}; }
-        std::suspend_always final_suspend() noexcept { return {}; }
 
         void* operator new(std::size_t n) {
             return colite::port::calloc(n, sizeof(std::byte));
@@ -36,9 +35,14 @@ namespace colite::detail {
         using base_promise_t = base_promise<promise_type>;
     public:
         using base_promise_t::initial_suspend;
-        using base_promise_t::final_suspend;
         using base_promise_t::operator new;
         using base_promise_t::operator delete;
+
+        std::suspend_never final_suspend() noexcept {
+            colite_assert(state_->get_status() != coroutine_status::CANCELED);
+            state_->set_status(coroutine_status::FINISHED);
+            return {};
+        }
 
         auto get_return_object() -> Coro {
             this_handle_ = std::coroutine_handle<promise_type>::from_promise(*this);
@@ -91,9 +95,14 @@ namespace colite::detail {
         using base_promise_t = base_promise<promise_type>;
     public:
         using base_promise_t::initial_suspend;
-        using base_promise_t::final_suspend;
         using base_promise_t::operator new;
         using base_promise_t::operator delete;
+
+        std::suspend_never final_suspend() noexcept {
+            colite_assert(state_->get_status() != coroutine_status::CANCELED);
+            state_->set_status(coroutine_status::FINISHED);
+            return {};
+        }
 
         auto get_return_object() -> Coro {
             this_handle_ = std::coroutine_handle<promise_type>::from_promise(*this);
@@ -159,7 +168,6 @@ namespace colite {
             if (!*this) {
                 return;
             }
-            auto status = state_->get_status();
             if (!has_detached_) {
                 cancel();
             }
@@ -248,13 +256,11 @@ namespace colite {
             if (status == coroutine_status::FINISHED || status == coroutine_status::CANCELED) {
                 return;
             }
-            state_->cancel();
+            state_->set_status(coroutine_status::CANCELED);
             auto dispatcher = state_->get_dispatcher();
             if (dispatcher) {
-                dispatcher->destroy(this_handle_);
+                dispatcher->cancel(this_handle_);
             }
-            this_handle_.destroy();
-            this_handle_ = nullptr;
         }
     protected:
         std::coroutine_handle<promise_type> this_handle_ {};

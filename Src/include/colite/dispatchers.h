@@ -32,7 +32,7 @@ namespace colite {
             std::coroutine_handle<> handle = coroutine.get_coroutine_handle();
             colite_assert(handle);
             coroutine.state_->set_dispatcher(this);
-            coroutine.state_->start();
+            coroutine.state_->set_status(coroutine_status::STARTED);
 
             // 前往目标调度器上回复该协程
             dispatch(handle.address(), duration, [handle, state = coroutine.state_, this] {
@@ -48,15 +48,10 @@ namespace colite {
                                 }
                             );
                         }
-                        auto status = state->get_status();
-                        if (status != coroutine_status::CANCELED && status != coroutine_status::FINISHED) {
-                            state->finish();
-                            state->get_dispatcher()->destroy(handle);
-                            handle.destroy();
-                        }
                     },
                     [=] {
-                        return handle.done();
+                        auto status = state->get_status();
+                        return status == coroutine_status::CANCELED || status == coroutine_status::FINISHED;
                     }
                 );
             });
@@ -71,7 +66,7 @@ namespace colite {
          * @brief 取消所有与当前协程关联的任务，并从协程列表中删除该协程
          * @param handle 协程句柄
          */
-        void destroy(std::coroutine_handle<> handle);
+        void cancel(std::coroutine_handle<> handle);
 
         virtual void dispatch(void *id, colite::port::time_duration time, colite::callable<void()> callable) = 0;
         virtual void dispatch(void *id, colite::port::time_duration time, colite::callable<void()> callable, colite::callable<bool()> predicate) = 0;

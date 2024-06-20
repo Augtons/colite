@@ -9,6 +9,6 @@ auto colite::dispatcher::sleep(colite::port::time_duration time) -> colite::susp
     return launch(nop_coroutine(), time);
 }
 
-void colite::dispatcher::destroy(std::coroutine_handle<> handle) {
+void colite::dispatcher::cancel(std::coroutine_handle<> handle) {
     cancel_jobs(handle.address());
 }
