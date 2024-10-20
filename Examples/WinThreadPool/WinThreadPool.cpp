@@ -44,9 +44,11 @@ MyWorkCallback(
     //
     // Do something when the work callback is invoked.
     //
+    CloseThreadpoolWork(Work);
      {
          _tprintf(_T("MyWorkCallback: Task performed.\n"));
      }
+
 }
 
 VOID
@@ -83,7 +85,7 @@ DemoCleanupPersistentWorkTimer()
     // The thread pool is made persistent simply by setting
     // both the minimum and maximum threads to 1.
     //
-    SetThreadpoolThreadMaximum(pool, 1);
+    SetThreadpoolThreadMaximum(pool, 5);
 
     bRet = SetThreadpoolThreadMinimum(pool, 1);
 
