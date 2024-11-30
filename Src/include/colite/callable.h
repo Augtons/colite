@@ -3,6 +3,7 @@
 #include <bitset>
 #include <cstddef>
 #include <utility>
+#include <array>
 #include <functional>
 #include <memory>
 

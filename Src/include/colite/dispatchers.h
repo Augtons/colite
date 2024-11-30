@@ -14,7 +14,7 @@ namespace colite {
     class dispatcher {
         using byte_allocator = colite::allocator::allocator<std::byte>;
 
-        template<typename T = void>
+        template<typename T>
         friend class colite::suspend;
 
     public:

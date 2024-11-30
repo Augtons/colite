@@ -3,6 +3,7 @@
 #include <cassert>
 #include <chrono>
 #include <unordered_map>
+#include <mutex>
 
 #define colite_assert(...) assert(__VA_ARGS__)
 
